@@ -10,7 +10,7 @@ def evaluate_retrieval(retriever, dataset, k=10):
     mrr_scores = []
     recall_at_k = []
     global_offset = 0
-    for i, item in tqdm(dataset, desc="Evaluating retrieval"):
+    for item in tqdm(dataset, desc="Evaluating retrieval"):
         question = item["query"]
         gold_labels = item["gold_labels"]
         gold_labels_idx = [global_offset + j for j,label in enumerate(gold_labels) if label==1]
@@ -95,7 +95,7 @@ def evaluate_generation(generator, retriever, dataset, k=10):
     }
 
 def main(args):
-    file_path = os.path.join("data", "dev.json")
+    file_path = os.path.join(args.data_path, "dev.json")
     with open(file_path, "r") as f:
         val_dataset = json.load(f)
     all_passages = []
@@ -119,11 +119,11 @@ def main(args):
         # all_gold.append(gold_labels)
         val_data.append({"query": query, "gold_labels": gold_labels, "answer": answer})
 
-    bm25_retriever = BM25Retriever()
-    bm25_retriever.index(all_passages)
+    bm25_retriever = BM25Retriever(all_passages)
+    bm25_retriever.index(save=True)
     
-    dense_retriever = DenseRetriever()
-    dense_retriever.index(all_passages)
+    dense_retriever = DenseRetriever(all_passages)
+    dense_retriever.index(save=True)
     
     if args.model_type == "bm25":
         active_retriever = bm25_retriever
@@ -133,6 +133,7 @@ def main(args):
     generator = LLMGenerator(model_name=args.llm_model)
     
     print("Evaluating retrieval performance...")
+    import pdb; pdb.set_trace()
     retrieval_metrics = evaluate_retrieval(active_retriever, val_data, k=args.top_k)
     print("Retrieval metrics:", retrieval_metrics)
     
@@ -153,7 +154,7 @@ def main(args):
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="GNN-based Retrieval for QA")
-    parser.add_argument("--data_path", type=str, default="./data",
+    parser.add_argument("--data_path", type=str, default="/raid/infolab/deekshak/ir3/data/data_ids/",
                         help="Path to dataset")
     parser.add_argument("--output_dir", type=str, default="./results",
                         help="Directory to save results and models")
