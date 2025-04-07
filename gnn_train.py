@@ -136,9 +136,9 @@ class GCN(torch.nn.Module):
         positive_doc_mask = positive_doc_mask.reshape(batch.shape[0], -1)
         pos_doc_emb = out * positive_doc_mask
 
-        final_emb = global_mean_pool(pos_doc_emb, batch)
-
-        return final_emb, out
+        positive_passages_emb = global_mean_pool(pos_doc_emb, batch)
+        all_passages_emb = out
+        return positive_passages_emb, all_passages_emb
     
 gnn_model = GCN(input_dim= 768, hidden_dim=768, output_dim=768, num_layers=args.Num_layers, dropout=0.1, aggr=args.Aggregate)
 # taking input, hidden and output dim to be same for calculating scoring function in loss
