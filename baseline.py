@@ -60,7 +60,7 @@ class DenseRetriever:
             self.passage_embeddings = torch.load(self.index_file)
 
     def index(self, save=False):
-        if not self.passage_embeddings or save:
+        if self.passage_embeddings is None or save:
             self.passage_embeddings = self.model.encode(self.passages, convert_to_tensor=True)
             torch.save(self.passage_embeddings, self.index_file)
     

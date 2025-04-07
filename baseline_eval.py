@@ -6,6 +6,43 @@ import argparse
 from baseline import BM25Retriever, DenseRetriever
 from llm import LLMGenerator
 
+def load_data(data_path, split="dev"):
+    file_path = os.path.join(data_path, f"{split}.json")
+    with open(file_path, "r") as f:
+        val_dataset = json.load(f)
+
+    all_passages = []
+    val_data = []
+    for i, item in enumerate(val_dataset):
+        query = item["question"]
+        answer = item["answer"]
+        passages = item["context"]
+        gold_labels = [0] * len(passages)
+        for j, passage in enumerate(passages):
+            title = passage[0]
+            sentences = passage[1]
+            passage_str = title + "\n" + "\n".join(sentences)
+
+            supporting_facts_titles = [title for title, _ in item["supporting_facts"]]
+            if title in supporting_facts_titles:
+                gold_labels[j] = 1
+            
+            all_passages.append(passage_str)
+        val_data.append({"query": query, "gold_labels": gold_labels, "answer": answer})
+    return all_passages, val_data
+
+def get_retriever_and_index(all_passages, model_type, dense_model_name):
+    bm25_retriever = BM25Retriever(all_passages)
+    bm25_retriever.index(True)
+    
+    dense_retriever = DenseRetriever(all_passages, dense_model_name)
+    dense_retriever.index(True)
+
+    if model_type == "bm25":
+        return bm25_retriever
+    else:
+        return dense_retriever
+
 def evaluate_retrieval(retriever, dataset, k=10):
     mrr_scores = []
     precision_scores = []
@@ -55,18 +92,32 @@ def evaluate_retrieval(retriever, dataset, k=10):
     print("Retrieval metrics:", retrieval_metrics)
     return retrieval_metrics
 
-def evaluate_generation(generator, retriever, dataset, k=10):
+def evaluate_generation(generator, retriever, dataset, model_type, k=10):
     rouge = Rouge()
     f1_scores = []
     rouge_scores = []
     em_scores = []
+    global_offset = 0
+    detailed_logs = []
 
-    for item in tqdm(dataset, desc="Evaluating generation"):
+    os.makedirs("retrieval_logs", exist_ok=True)
+    for idx, item in enumerate(tqdm(dataset, desc="Evaluating generation")):
         question = item["query"]
         gold_answer = item["answer"]
-        
+        gold_labels = item["gold_labels"]
+        gold_labels_idx = [global_offset + j for j, label in enumerate(gold_labels) if label == 1]
+        global_offset += len(gold_labels) 
+
         top_passages, _, _ = retriever.retrieve(question, k=k)
-        generated_answer = generator.generate(question, top_passages)
+        generated_answer = generator.generate(question, top_passages[:3])
+
+        detailed_logs.append({
+                "query": question,
+                "gold_answer": gold_answer,
+                "generated_answer": generated_answer,
+                "retrieved_passages": top_passages,
+                "gold_passages": [retriever.passages[idx] for idx in gold_labels_idx]
+            })
 
         # F1 score (word overlap)
         pred_words = set(generated_answer.lower().split())
@@ -91,7 +142,10 @@ def evaluate_generation(generator, retriever, dataset, k=10):
                 "rouge-2": {"f": 0, "p": 0, "r": 0},
                 "rouge-l": {"f": 0, "p": 0, "r": 0}
             })
-    
+
+    with open(f"retrieval_logs/all_query_logs_{model_type}.json", "w") as f:
+        json.dump(detailed_logs, f, indent=2)
+
     avg_f1 = sum(f1_scores) / len(f1_scores) if f1_scores else 0
     avg_rouge = {
         "rouge-1": {"f": 0, "p": 0, "r": 0},
@@ -117,43 +171,6 @@ def evaluate_generation(generator, retriever, dataset, k=10):
     print("Generation metrics:", generation_metrics)
     return generation_metrics
 
-def load_data(data_path, split="dev"):
-    file_path = os.path.join(data_path, f"{split}.json")
-    with open(file_path, "r") as f:
-        val_dataset = json.load(f)
-
-    all_passages = []
-    val_data = []
-    for i, item in enumerate(val_dataset):
-        query = item["question"]
-        answer = item["answer"]
-        passages = item["context"]
-        gold_labels = [0] * len(passages)
-        for j, passage in enumerate(passages):
-            title = passage[0]
-            sentences = passage[1]
-            passage_str = title + "\n" + "\n".join(sentences)
-
-            supporting_facts_titles = [title for title, _ in item["supporting_facts"]]
-            if title in supporting_facts_titles:
-                gold_labels[j] = 1
-            
-            all_passages.append(passage_str)
-        val_data.append({"query": query, "gold_labels": gold_labels, "answer": answer})
-    return all_passages, val_data
-
-def get_retriever_and_index(all_passages, model_type, dense_model_name):
-    bm25_retriever = BM25Retriever(all_passages)
-    bm25_retriever.index(True)
-    
-    dense_retriever = DenseRetriever(all_passages, dense_model_name)
-    dense_retriever.index(True)
-
-    if model_type == "bm25":
-        return bm25_retriever
-    else:
-        return dense_retriever
-
 def save_results(args, retrieval_metrics, generation_metrics):
     results = {
         "model_type": args.model_type,
@@ -173,12 +190,12 @@ def main(args):
     generator = LLMGenerator(model_name=args.llm_model)
 
     retrieval_metrics = evaluate_retrieval(retriever, val_data, k=args.top_k)
-    generation_metrics = evaluate_generation(generator, retriever, val_data, k=args.top_k)
+    generation_metrics = evaluate_generation(generator, retriever, val_data, args.model_type, k=args.top_k)
     save_results(args, retrieval_metrics, generation_metrics)
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="GNN-based Retrieval for QA")
-    parser.add_argument("--data_path", type=str, default="/raid/infolab/deekshak/ir3/data/data_ids/",
+    parser.add_argument("--data_path", type=str, default="./data",
                         help="Path to dataset")
     parser.add_argument("--output_dir", type=str, default="./results",
                         help="Directory to save results and models")

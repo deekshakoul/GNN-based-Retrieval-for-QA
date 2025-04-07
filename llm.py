@@ -14,7 +14,7 @@ class LLMGenerator:
         """
         Generate an answer given a question and retrieved contexts
         """
-        context_text = " ".join(contexts)
+        context_text = "\n".join(contexts)
         input_text = f"question: {question} context: {context_text}"
         
         inputs = self.tokenizer(input_text, return_tensors="pt", max_length=512, truncation=True)
