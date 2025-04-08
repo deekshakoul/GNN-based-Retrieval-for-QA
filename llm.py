@@ -5,7 +5,7 @@ class LLMGenerator:
     """
     Answer generator using a pre-trained T5 model
     """
-    def __init__(self, model_name="t5-base"):
+    def __init__(self, model_name="google/flan-t5-base"):
         self.device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
         self.tokenizer = T5Tokenizer.from_pretrained(model_name)
         self.model = T5ForConditionalGeneration.from_pretrained(model_name).to(self.device)
