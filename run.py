@@ -4,13 +4,23 @@ import torch
 import torch.nn.functional as F
 from transformers import AutoTokenizer, AutoModel
 from torch_geometric.data import Data
-from itertools import permutations
+from itertools import permutations, combinations
 
 
 MODEL_NAME = 'sentence-transformers/all-mpnet-base-v2'
 DEVICE="cuda"
 DATA_FOLDER_PATH="data/data_ids/"
-dev = json.load(open(DATA_FOLDER_PATH+"dev.json"))    
+dev = json.load(open(DATA_FOLDER_PATH+"dev.json")) 
+
+title_passage_dict = {}
+for i in range(len(dev)):
+    for idx, list_ in enumerate(dev[i]["context"]):
+        title, list_sents = list_
+        passage = " ".join(list_sents)
+        title_passage_dict[title] = passage
+
+with open("dev_title_passage_dict", "w") as fp: json.dump(title_passage_dict, fp)
+
 train = json.load(open(DATA_FOLDER_PATH+"train.json"))
 print(f"train: {len(train)} val:{len(dev)}")
 
@@ -46,9 +56,11 @@ class GoP:
         self.tokenizer = AutoTokenizer.from_pretrained(MODEL_NAME)
         self.sentence_transformer = SentenceTransformerModel()
         self.threshold = 0.55
+        self.match_words_threshold = 20
         print(f"\n\n ==================== \n\n")
-        self.create_and_save_graphs(train_data, "train")
+
         self.create_and_save_graphs(dev_data, "dev")
+        self.create_and_save_graphs(train_data, "train")
 
     
     def create_data(self, data):
@@ -64,19 +76,22 @@ class GoP:
             passages = []
             pos_ids = []
             supporting_titles = []
+            titles = []
             supporting_facts = data[i]["supporting_facts"]
             for fact in supporting_facts:
                 supporting_titles.append(fact[0])
             for idx, list_ in enumerate(data[i]["context"]):
                 title, list_sents = list_
                 passage = title + "\t" + " ".join(list_sents)
-                passages.append(passage)     
+                passages.append(passage)
+                titles.append(title)     
                 if title in supporting_titles:
                     pos_ids.append(idx) 
             data_dict[key] = {
                             "query": data[i]["question"],
                             "passages": passages, #list of passages
-                            "positive_ids": pos_ids
+                            "positive_ids": pos_ids,
+                            "passage_titles": titles
             }
             # import pdb; pdb.set_trace()     
             # if i == 10:
@@ -86,8 +101,14 @@ class GoP:
     def same_question_based_graph(self, passages):
         pass
     
-    def common_keywords_based_graph(self, passages):
-        pass
+    def common_keywords_based_edges(self, passages):
+        tokenized = [set(p.lower().split()) for p in passages]
+        matching_pairs = []
+        for i, j in combinations(range(len(passages)), 2):
+            common_words = tokenized[i] & tokenized[j]
+            if len(common_words) > self.match_words_threshold:
+                matching_pairs.append((i, j))
+        return matching_pairs
 
     def fetch_embeddings(self, passages_per_query):
         encoded_input = self.tokenizer(passages_per_query, padding=True, truncation=True, return_tensors='pt') # go upto max pasage length 
@@ -95,23 +116,32 @@ class GoP:
         return output
     
     def embedding_based_graph(self, passages, positive_ids):
+        common_words_edges = self.common_keywords_based_edges(passages)
         embeddings = self.fetch_embeddings(passages) # number_passages_in_context x 768
         normalized = torch.nn.functional.normalize(embeddings, p=2, dim=1)
         similarity_matrix = normalized @ normalized.T 
         edge_mask = (similarity_matrix > self.threshold) & (~torch.eye(len(passages), dtype=bool, device=similarity_matrix.device))
         src, dst = torch.where(edge_mask)
         edges = list(zip(src.tolist(), dst.tolist()))
-        pos_edges = list(permutations(positive_ids, 2))  
+        pos_edges = list(permutations(positive_ids, 2))  # a,b b,a
         edges.extend(pos_edges)
+        edges.extend(common_words_edges)
         edges = list(set(edges))
         edge_index = torch.tensor(edges, dtype=torch.long).t().contiguous()
         x = torch.tensor(embeddings.cpu().numpy(), dtype=torch.float)
-        return Data(x=x, edge_index=edge_index)  
+        pos_ids_tensor =  torch.tensor(positive_ids, dtype=torch.long)
+        return Data(x=x, edge_index=edge_index, positive_ids=pos_ids_tensor)  
 
     def create_and_save_graphs(self, data, name):
         graph_dict = {}
         for key in tqdm(data):
+            graph_dict[key] = {}
             graph  = self.embedding_based_graph(data[key]["passages"], data[key]["positive_ids"])
-            graph_dict[key] = graph 
-        torch.save(graph_dict, f"data/{name}_graph_dict.pt")
+            graph_dict[key]["graph"]= graph 
+            graph_dict[key]["positive_ids"] = data[key]["positive_ids"]
+            graph_dict[key]["query"] = data[key]["query"]
+            if name == "dev":
+                graph_dict[key]["passage_titles"] = data[key]["passage_titles"]
+        torch.save(graph_dict, f"data/{name}_graph_dict_Heuristics2.pt")
+        print(f"saved - {name}_graph_dict data")
 gop = GoP()
