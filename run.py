@@ -9,7 +9,7 @@ from itertools import permutations, combinations
 
 
 from itertools import permutations, combinations
-
+from selective_sampler import SelectiveSampler
 
 MODEL_NAME = 'sentence-transformers/all-mpnet-base-v2'
 DEVICE="cuda"
@@ -65,6 +65,7 @@ class GoP:
 
         self.create_and_save_graphs(dev_data, "dev")
         self.create_and_save_graphs(train_data, "train")
+        self.selective_sampler = SelectiveSampler()
 
     
     def create_data(self, data):
@@ -120,7 +121,7 @@ class GoP:
         return output
     
     def embedding_based_graph(self, passages, positive_ids):
-        common_words_edges = self.common_keywords_based_edges(passages)
+        # common_words_edges = self.common_keywords_based_edges(passages)
         embeddings = self.fetch_embeddings(passages) # number_passages_in_context x 768
         normalized = torch.nn.functional.normalize(embeddings, p=2, dim=1)
         similarity_matrix = normalized @ normalized.T 
@@ -129,12 +130,13 @@ class GoP:
         edges = list(zip(src.tolist(), dst.tolist()))
         pos_edges = list(permutations(positive_ids, 2))  # a,b b,a
         edges.extend(pos_edges)
-        edges.extend(common_words_edges)
+        # edges.extend(common_words_edges)
         edges = list(set(edges))
         edge_index = torch.tensor(edges, dtype=torch.long).t().contiguous()
         x = torch.tensor(embeddings.cpu().numpy(), dtype=torch.float)
         pos_ids_tensor =  torch.tensor(positive_ids, dtype=torch.long)
-        return Data(x=x, edge_index=edge_index, positive_ids=pos_ids_tensor)  
+        selective_sampled_edges = self.selective_sampler(x, edge_index)
+        return Data(x=x, edge_index=edge_index, positive_ids=pos_ids_tensor, selective_sampled_edges = selective_sampled_edges)  
 
     def create_and_save_graphs(self, data, name):
         graph_dict = {}
