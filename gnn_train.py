@@ -205,7 +205,7 @@ class GraphDatasetContrastive(Dataset):
 
 # batching documentation - https://pytorch-geometric.readthedocs.io/en/2.4.0/notes/batching.html 
 train_loader = DataLoader(GraphDatasetContrastive(encoded_input['input_ids'], encoded_input['attention_mask'], 
-                                                  graph_data_list, positive_doc_mask), batch_size = args.Batch_size, shuffle = False)
+                                                  graph_data_list, positive_doc_mask), batch_size = args.Batch_size, shuffle = True)
 
 optimizer = torch.optim.Adam(gnn_model.parameters(), lr = 1e-3)
 contrastive_loss = infonce()
