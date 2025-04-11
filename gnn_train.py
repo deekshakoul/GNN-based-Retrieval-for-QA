@@ -10,9 +10,9 @@ import numpy as np
 import torch.nn as nn
 import random
 from torch.utils.data import Dataset
+from torch_geometric.data import Data
 from tqdm import tqdm
 from torch_geometric.nn import global_mean_pool
-
 from transformers import AutoTokenizer, AutoModel, HfArgumentParser
 from sentence_transformers import SentenceTransformer
 import pdb
@@ -35,6 +35,7 @@ class RunArguments:
     Num_layers: int
     Num_epochs: int
     Batch_size: int
+    selective_sampling: bool
     input_data_path: str
     output_data_path: str
 
@@ -57,19 +58,25 @@ positive_doc_mask_list = []
 
 for key,val in tqdm(data.items()):
      input_query_list.append(val['query'])
-     graph_data_list.append(val['graph']['graph'])
+     curr_node_emb = val['graph'].x
+     if(args.selective_sampling):
+        curr_edge = val['graph'].selective_sampled_edges
+     else:
+        curr_edge = val['graph'].edge_index
 
-     num_docs = val['graph']['graph'].x.shape[0]
-     temp_positive_ids = val['graph']['graph'].positive_ids
+     curr_pos_ids = val['graph'].positive_ids
+     temp_graph_data = Data(x=curr_node_emb, edge_index = curr_edge, positive_ids=curr_pos_ids)
      
+     graph_data_list.append(temp_graph_data)
+
+     num_docs = val['graph'].x.shape[0]
      temp_pos_doc_mask = torch.zeros(num_docs)
-     temp_pos_doc_mask[temp_positive_ids] = 1
+     temp_pos_doc_mask[curr_pos_ids] = 1
      
      positive_doc_mask_list.append(temp_pos_doc_mask)
     
 positive_doc_mask = torch.stack(positive_doc_mask_list)
 encoded_input = tokenizer(input_query_list, return_tensors="pt", truncation=True, padding=True)
-
 
 class SentenceTransformerModel(torch.nn.Module):
     def __init__(self):
@@ -176,7 +183,6 @@ class infonce(nn.Module):
         pos_sim = sim_matrix[range(batch_size), range(batch_size)]
         loss = pos_sim / (sim_matrix.sum(dim=1) - pos_sim)
         new_loss = -torch.log(loss).mean()
-        # pdb.set_trace()
         return new_loss
 
 class GraphDatasetContrastive(Dataset):
@@ -199,7 +205,7 @@ class GraphDatasetContrastive(Dataset):
 
 # batching documentation - https://pytorch-geometric.readthedocs.io/en/2.4.0/notes/batching.html 
 train_loader = DataLoader(GraphDatasetContrastive(encoded_input['input_ids'], encoded_input['attention_mask'], 
-                                                  graph_data_list, positive_doc_mask), batch_size = args.Batch_size, shuffle = True)
+                                                  graph_data_list, positive_doc_mask), batch_size = args.Batch_size, shuffle = False)
 
 optimizer = torch.optim.Adam(gnn_model.parameters(), lr = 1e-3)
 contrastive_loss = infonce()
@@ -216,6 +222,7 @@ def train(loader):
         query_ids = data[0].to(device)
         query_mask = data[1].to(device)
         graph_data = data[2].to(device)
+        
         feature_matrix = graph_data.x
         edge_index = graph_data.edge_index
         positive_doc_mask = data[3].to(device)
@@ -246,6 +253,9 @@ for epoch in range(args.Num_epochs):
     if(epoch_loss < best_epoch_loss):
         best_epoch_loss = epoch_loss
         
-        torch.save(gnn_model.state_dict(), f'{args.output_data_path}/gnn_model_num_layer_{args.Num_layers}_aggregate_{args.Aggregate}' + '.pt')
+        if(args.selective_sampling):
+            torch.save(gnn_model.state_dict(), f'{args.output_data_path}/gnn_model_num_layer_{args.Num_layers}_aggregate_{args.Aggregate}_selective_sampling' + '.pt')
+        else:
+            torch.save(gnn_model.state_dict(), f'{args.output_data_path}/gnn_model_num_layer_{args.Num_layers}_aggregate_{args.Aggregate}' + '.pt')
 
         print("model saved\n")
