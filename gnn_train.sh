@@ -1,6 +1,6 @@
 #!/bin/bash
-input_data_path="/mnt/nas/deekshak/ir3/GNN-based-Retrieval-for-QA/data/train_graph_dict_sampler.pt"
-output_data_path="/mnt/nas/mohitsinghtomar/project_experiments/ir_assignment/assignment_3/saved_model"
+input_data_path=""
+output_data_path=""
 for aggr in "sum" "max" "mean" "min"; do
     echo "aggr = $aggr"
     python gnn_train.py \
