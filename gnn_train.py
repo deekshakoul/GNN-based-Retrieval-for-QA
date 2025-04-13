@@ -36,6 +36,7 @@ class RunArguments:
     Num_epochs: int
     Batch_size: int
     selective_sampling: bool
+    additional_heuristics: bool
     input_data_path: str
     output_data_path: str
 
@@ -255,6 +256,8 @@ for epoch in range(args.Num_epochs):
         
         if(args.selective_sampling):
             torch.save(gnn_model.state_dict(), f'{args.output_data_path}/gnn_model_num_layer_{args.Num_layers}_aggregate_{args.Aggregate}_selective_sampling' + '.pt')
+        elif(args.additional_heuristics):
+            torch.save(gnn_model.state_dict(), f'{args.output_data_path}/gnn_model_num_layer_{args.Num_layers}_aggregate_{args.Aggregate}_additional_heuristics' + '.pt')
         else:
             torch.save(gnn_model.state_dict(), f'{args.output_data_path}/gnn_model_num_layer_{args.Num_layers}_aggregate_{args.Aggregate}' + '.pt')
 
