@@ -1,6 +1,7 @@
 from dataclasses import dataclass
 from torch_geometric.utils import negative_sampling, subgraph, to_networkx
 import torch
+import json
 from torch_geometric.data import DataLoader
 import torch.nn.functional as F
 from tqdm import tqdm
@@ -27,17 +28,15 @@ class EvalArguments:
     gcn_model_path: str
     data_path: str 
     aggregate: str 
-    num_layers: 2
+    num_layers: int
+    gnn_retrived_file_name: str
 
 encoder_name = 'sentence-transformers/all-mpnet-base-v2'
 device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
-
-model_path ="/mnt/nas/mohitsinghtomar/project_experiments/ir_assignment/assignment_3/saved_model/gnn_model_num_layer_2_aggregate_sum.pt"
-data_path = "/mnt/nas/deekshak/ir3/GNN-based-Retrieval-for-QA/data/dev_graph_dict.pt"
-Aggregate = "sum"
 BATCH_SIZE = 1
-Num_layers = 2
 
+with open('dev_title_passage_dict.json') as f:
+    title_passage_dev = json.load(f)
 
 tokenizer = AutoTokenizer.from_pretrained(encoder_name)
 
@@ -66,27 +65,21 @@ def create_dataloader(args):
         for pass_title in val["passage_titles"]:
             map_index_title[index] = pass_title
             index += 1
-            # if pass_title == "Nitin Bose": tmp.append(index-1)
-            # if pass_title == "Nitin Bose":
-            #     import pdb; pdb.set_trace()
         assert len(val["passage_titles"]) == 10
-        # if key in ['479265fa0bdc11eba7f7acde48001122', '7d9d5d720bdb11eba7f7acde48001122', '89af0df60bd911eba7f7acde48001122', '7b0e01820bdc11eba7f7acde48001122']:
-        #     print(index)
-        #     import pdb; pdb.set_trace()
-    
+
     positive_doc_mask = torch.stack(positive_doc_mask_list)
     encoded_input = tokenizer(input_query_list, return_tensors="pt", truncation=True, padding=True)
 
     dev_loader = DataLoader(GraphDatasetContrastive(encoded_input['input_ids'], encoded_input['attention_mask'], 
                                                   graph_data_list, positive_doc_mask), batch_size = BATCH_SIZE, shuffle = False)
     
-    return dev_loader, pos_ids, map_index_title
+    return dev_loader, pos_ids, map_index_title, input_query_list
 
  
 def load_model(args):
     gnn_model = GCN(input_dim= 768, hidden_dim=768, output_dim=768, num_layers=args.num_layers, dropout=0.1, aggr=args.aggregate)
     gnn_model = gnn_model.to(device)
-    gnn_model.load_state_dict(torch.load(args.model_path))
+    gnn_model.load_state_dict(torch.load(args.gcn_model_path))
     gnn_model.eval()
     sentencetransformer_model = SentenceTransformerModel()
     sentencetransformer_model = sentencetransformer_model.to(device)
@@ -95,11 +88,8 @@ def load_model(args):
 
 
 def evaluate(args):
-    loader, pos_ids, map_index_title = create_dataloader(args)
+    loader, pos_ids, map_index_title, input_query_list = create_dataloader(args)
     gnn_model, sentencetransformer_model = load_model(args)
-    # contrastive_loss = infonce()
-    # total_loss = 0.0
-    assert_passages_len_per_query =  10
     query_embeddings = []
     passage_embeddings = []
     index = 0
@@ -117,21 +107,7 @@ def evaluate(args):
             positive_passage_emb, pass_embeddings = gnn_model(feature_matrix = feature_matrix, edge_index = edge_index, positive_doc_mask = positive_doc_mask, batch = batch)
         query_embeddings.append(query_emb)
         passage_embeddings.append(pass_embeddings)
-        # if  tmp[0]-10 < index < tmp[0]:
-        #     import pdb; pdb.set_trace()
-        # if  tmp[1]-10 < index < tmp[1]:
-        #     import pdb; pdb.set_trace()
         index += 10
-
-        # loss = contrastive_loss(query_emb, positive_passage_emb)
-        # total_loss += loss.item()
-        # graph_embedding bs x 768
-        # query_emb 1 x 768
-        # passage_embeddings = F.normalize(passage_embeddings, p=2, dim=1)
-        # query_emb = F.normalize(query_emb, p=2, dim=1)
-        # Compute cosine similarity: [10 x 768] @ [768 x 1] => [10 x 1]
-        # cosine_sim = torch.matmul(passage_embeddings, query_emb.T).squeeze()
-        # sorted_indices = torch.argsort(cosine_sim, descending=True)
     all_query_embeddings = torch.cat(query_embeddings, dim=0)
     all_passage_embeddings = torch.cat(passage_embeddings, dim=0)
 
@@ -142,10 +118,21 @@ def evaluate(args):
 
     ## evaluation ##
     top_k_temp = 20
-    top_k=10
-    topk_scores, topk_indices = torch.topk(cosine_scores, k=top_k_temp, dim=1)  # [5000, k]
+    top_k = 10
+    icl_exs_num = 10
+    icl_exs = evaluate_metrics(top_k, top_k_temp, icl_exs_num, cosine_scores, pos_ids, map_index_title)
 
+
+    top_k_temp = 20
+    top_k = 5
+    icl_exs_num = 10
+    icl_exs_del = evaluate_metrics(top_k, top_k_temp, icl_exs_num, cosine_scores, pos_ids, map_index_title)
+
+    return icl_exs, input_query_list
+
+def evaluate_metrics(top_k, top_k_temp, icl_exs_num, cosine_scores, pos_ids, map_index_title):
     final_topk_indices = []
+    topk_scores, topk_indices = torch.topk(cosine_scores, k=top_k_temp, dim=1)  # [5000, k]
     for i in tqdm(range(topk_indices.size(0))):  # for each query
         seen_titles = set()
         top10 = []
@@ -162,20 +149,22 @@ def evaluate(args):
         if len(top10) < top_k:
             assert Exception
         final_topk_indices.append(top10)
-
     f1_all = []
     mrr_all = []
+    gold_passages = []
     for i in tqdm(range(len(final_topk_indices))): 
         st = i*10
         en = st + 10
         pos_indices = [pos+10*i for pos in pos_ids[i]]
-
         topk_indices_q = final_topk_indices[i]
-        
+        # retrieved passages to be passed in prompt to T5 
+        gold_ = [title_passage_dev[map_index_title[i]] for i in topk_indices_q[:icl_exs_num]]
+        gold_passages.append(gold_)
+
         hit = []
         mrr = 0
         for rank, ind in enumerate(topk_indices_q):
-            if st < ind < en and ind in pos_indices:
+            if st <= ind < en and ind in pos_indices:
                 hit.append(ind)
                 if len(hit) == 1:
                     mrr = 1/(rank+1)
@@ -188,17 +177,26 @@ def evaluate(args):
         precision = tp / (tp + fp) if (tp + fp) > 0 else 0
         recall = tp / (tp + fn) if (tp + fn) > 0 else 0
         f1 = (2 * precision * recall) / (precision + recall) if (precision + recall) > 0 else 0
-
         f1_all.append(f1)
 
-        
+    print(f"top: {top_k}, MRR: {np.mean(mrr_all):.4f}")
+    print(f"top: {top_k}, F1: {np.mean(f1_all):.4f}")
 
-    print(f"MRR: {np.mean(mrr_all):.4f}")
-    print(f"F1: {np.mean(f1_all):.4f}")
-
+    return gold_passages
 
 if __name__ == "__main__":
     parser = HfArgumentParser((EvalArguments))
     args = parser.parse_args()
     print(args)
+    icl_examples, queries = evaluate(args)
+
+    dd = {}
+    for i in range(len(queries)):
+        query = queries[i]
+        dd[query] = icl_examples[i]
+
+
+with open(f"{args.gnn_retrived_file_name}", "w") as f:
+    json.dump(dd, f, indent=4)
+    
 
