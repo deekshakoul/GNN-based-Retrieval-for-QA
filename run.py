@@ -1,3 +1,4 @@
+from selective_sampler import SelectiveSampler
 from tqdm import tqdm
 import json
 import torch
@@ -6,10 +7,8 @@ from torch.utils.data import TensorDataset, DataLoader
 from transformers import AutoTokenizer, AutoModel
 from torch_geometric.data import Data
 from itertools import permutations, combinations
-
-
-from itertools import permutations, combinations
-from selective_sampler import SelectiveSampler
+import spacy
+nlp = spacy.load("en_core_web_sm")
 
 MODEL_NAME = 'sentence-transformers/all-mpnet-base-v2'
 DEVICE="cuda"
@@ -53,19 +52,22 @@ class GoP:
                     positive_ids: supporting_facts
                     G: from context
     '''
-    def __init__(self):
+    def __init__(self, selective_sampling=False):
+        self.selective_sampling = selective_sampling
+        if selective_sampling:
+            self.selective_sampler = SelectiveSampler()
         train_data = self.create_data(train)
         dev_data = self.create_data(dev)
         print("completed train and dev data creation")
         self.tokenizer = AutoTokenizer.from_pretrained(MODEL_NAME)
         self.sentence_transformer = SentenceTransformerModel()
         self.threshold = 0.55
-        self.match_words_threshold = 20
+        self.match_words_threshold = 2
         print(f"\n\n ==================== \n\n")
 
         self.create_and_save_graphs(dev_data, "dev")
         self.create_and_save_graphs(train_data, "train")
-        self.selective_sampler = SelectiveSampler()
+
 
     
     def create_data(self, data):
@@ -98,15 +100,22 @@ class GoP:
                             "positive_ids": pos_ids,
                             "passage_titles": titles
             }
-            # import pdb; pdb.set_trace()     
-            # if i == 10:
-            #     break
         return data_dict
 
-    def same_question_based_graph(self, passages):
-        pass
-    
+    def get_noun_keywords(self,passage):
+        doc = nlp(passage)
+        return set([token.lemma_ for token in doc if token.pos_ in {"NOUN", "PROPN"} and not token.is_stop])
+
     def common_keywords_based_edges(self, passages):
+        tokenized = [self.get_noun_keywords(p) for p in passages]
+        matching_pairs = []
+        for i, j in combinations(range(len(passages)), 2):
+            common_words = tokenized[i] & tokenized[j]
+            if len(common_words) > self.match_words_threshold:
+                matching_pairs.append((i, j))
+        return matching_pairs
+
+    def common_keywords_based_edges_(self, passages):
         tokenized = [set(p.lower().split()) for p in passages]
         matching_pairs = []
         for i, j in combinations(range(len(passages)), 2):
@@ -135,9 +144,11 @@ class GoP:
         edge_index = torch.tensor(edges, dtype=torch.long).t().contiguous()
         x = torch.tensor(embeddings.cpu().numpy(), dtype=torch.float)
         pos_ids_tensor =  torch.tensor(positive_ids, dtype=torch.long)
-        selective_sampled_edges = self.selective_sampler(x, edge_index)
-        return Data(x=x, edge_index=edge_index, positive_ids=pos_ids_tensor, selective_sampled_edges = selective_sampled_edges)  
-
+        if self.selective_sampling:
+            selective_sampled_edges = self.selective_sampler(x, edge_index)
+            return Data(x=x, edge_index=edge_index, positive_ids=pos_ids_tensor, selective_sampled_edges = selective_sampled_edges)  
+        return Data(x=x, edge_index=edge_index, positive_ids=pos_ids_tensor)
+    
     def create_and_save_graphs(self, data, name):
         graph_dict = {}
         for key in tqdm(data):
@@ -148,6 +159,6 @@ class GoP:
             graph_dict[key]["query"] = data[key]["query"]
             if name == "dev":
                 graph_dict[key]["passage_titles"] = data[key]["passage_titles"]
-        torch.save(graph_dict, f"data/{name}_graph_dict_Heuristics2.pt")
+        torch.save(graph_dict, f"data/{name}_graph_dict_heuristics21.pt")
         print(f"saved - {name}_graph_dict data")
 gop = GoP()
