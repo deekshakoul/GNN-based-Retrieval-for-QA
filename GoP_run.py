@@ -52,8 +52,9 @@ class GoP:
                     positive_ids: supporting_facts
                     G: from context
     '''
-    def __init__(self, selective_sampling=False):
+    def __init__(self, add_heuristics = False, selective_sampling=False):
         self.selective_sampling = selective_sampling
+        self.add_heuristics = add_heuristics
         if selective_sampling:
             self.selective_sampler = SelectiveSampler()
         train_data = self.create_data(train)
@@ -128,7 +129,6 @@ class GoP:
         return output
     
     def embedding_based_graph(self, passages, positive_ids):
-        # common_words_edges = self.common_keywords_based_edges(passages)
         embeddings = self.fetch_embeddings(passages) # number_passages_in_context x 768
         normalized = torch.nn.functional.normalize(embeddings, p=2, dim=1)
         similarity_matrix = normalized @ normalized.T 
@@ -137,7 +137,9 @@ class GoP:
         edges = list(zip(src.tolist(), dst.tolist()))
         pos_edges = list(permutations(positive_ids, 2))  # a,b b,a
         edges.extend(pos_edges)
-        # edges.extend(common_words_edges)
+        if self.add_heuristics:
+            common_words_edges = self.common_keywords_based_edges(passages)
+            edges.extend(common_words_edges)
         edges = list(set(edges))
         edge_index = torch.tensor(edges, dtype=torch.long).t().contiguous()
         x = torch.tensor(embeddings.cpu().numpy(), dtype=torch.float)
@@ -159,4 +161,6 @@ class GoP:
                 graph_dict[key]["passage_titles"] = data[key]["passage_titles"]
         torch.save(graph_dict, f"data/{name}_graph_dict_heuristics21.pt")
         print(f"saved - {name}_graph_dict data")
-gop = GoP()
+selective_sampling = False
+add_heuristics = False
+gop = GoP(add_heuristics, selective_sampling)
