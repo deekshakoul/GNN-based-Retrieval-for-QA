@@ -102,7 +102,7 @@ class GoP:
 
     def get_noun_keywords(self,passage):
         doc = nlp(passage)
-        return set([token.lemma_ for token in doc if token.pos_ in {"NOUN", "PROPN"} and not token.is_stop])
+        return set([token.lemma_ for token in doc if token.pos_ in {"NOUN", "PROPN", "ADJ"} and not token.is_stop])
 
     def common_keywords_based_edges(self, passages):
         tokenized = [self.get_noun_keywords(p) for p in passages]
