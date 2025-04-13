@@ -67,8 +67,6 @@ class GoP:
 
         self.create_and_save_graphs(dev_data, "dev")
         self.create_and_save_graphs(train_data, "train")
-
-
     
     def create_data(self, data):
         '''
